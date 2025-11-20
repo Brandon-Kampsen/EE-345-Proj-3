@@ -1,7 +1,7 @@
 /* 
  * Written by: Brandon Kampsen & Luke Johnson
  * Date Written: 11-19-2025
- * Description: Simple 3-input multiplexer we use in multiple parts of our SLP.
+ * File Description: Simple 3-input multiplexer we use in multiple parts of our SLP.
  *              This module just picks one of three data inputs based on a 
  *              2-bit select line. Modeled after common mux patterns from H&H.
  */
@@ -61,4 +61,5 @@ module mux3 #(parameter WIDTH = 8)(
 	end
 	
 endmodule
+
 
