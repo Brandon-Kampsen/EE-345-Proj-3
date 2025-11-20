@@ -1,18 +1,20 @@
-/*
-Written by: Luke Johnson & Brandon Kampsen
-Date Written: 10/18/2025
-Description: Peek logic to allow visibility of internal values on DE10-Lite HEX displays.
-*/
+/***
+Written by: Devin Nowowiejski & Nathan Arrends
+Date Written: 10/19/2025
+Peek/display harness for DE10-Lite
+***/
+
+//Changed variable names, check Top Level Module 
+// Fix comments and formatting 
 
 module peek_logic (
-    // Board I/O
-    input  logic [9:0]   SW,                // switches
-    input  logic         Step,              // debounced step pulse (unused)
-    input  logic         Peek,              // when low, force PC display
+    input  logic [9:0]   SW,                // Slide switches
+    input  logic         Step,              // Debounced step pulse (one pulse per press)
+    input  logic         Peek,              // KEY1: while pressed, display PC
     output logic [6:0]   HEX5, HEX4,
     output logic [6:0]   HEX3, HEX2, HEX1, HEX0,
 
-    // CPU / datapath taps
+    // Debug/peek inputs from CPU/datapath
     input  logic [31:0]  TapPC,
     input  logic [31:0]  TapInstruction,
     input  logic [31:0]  TapRD1,
@@ -21,10 +23,12 @@ module peek_logic (
     input  logic [31:0]  TapALUResult,
     input  logic [31:0]  TapDataMemOut,
     input  logic [31:0]  TapResult,
-	input  logic [31:0]  TapRE,
-	input  logic [31:0]  TapRM,
-	
-    // IO register taps that are mapped by memory
+    // Added: Execute-stage extended immediate
+    input  logic [31:0]  TapRE,
+    // Additional M-stage datapath tap
+    input  logic [31:0]  TapRM,
+
+    // Memory-mapped IO register taps
     input  logic [31:0]  TapPort0Data,
     input  logic [31:0]  TapPort0Control,
     input  logic [31:0]  TapPort1Data,
@@ -32,20 +36,20 @@ module peek_logic (
     input  logic [7:0]   Port0_Out,
     input  logic [7:0]   Port1_Out,
 
+
     // Regfile peek 
     output logic [3:0]   regfile_peek_sel,
     input  logic [31:0]  regfile_peek_data,
 
-    // IO inputs that will override to memory
+    // IO inputs in input mode
     output logic [7:0]   IO0InOverride,
     output logic [7:0]   IO1InOverride
 );
 
-    // For Sw8, 1 for input mode, 0 for display mode
-    logic mode_input;   
+    logic mode_input;   // SW8: 1=input mode, 0=display mode
     assign mode_input = SW[8];
 
-    // Cycle counter which ticks once per step)
+    // Cycle counter (one tick per step)
     logic [7:0] cycle_count;
     always_ff @(posedge Step) begin
         if (SW[9]) begin
@@ -55,7 +59,7 @@ module peek_logic (
         end
     end
 
-    // IO override while using the input mode
+    // IO input override in input mode
     always_comb begin
         IO0InOverride = 8'h00;
         IO1InOverride = 8'h00;
@@ -77,18 +81,18 @@ module peek_logic (
     logic [15:0] peek_half;
 
     always_comb begin
-        // Default peek value
-        peek_Value= 32'h0000_0000;
+        // Default
+        peek_Value = 32'h0000_0000;
 
-        // When peek button not pressed, show the Program Counter, if not use different source
+        // Show PC while Peek button is pressed; otherwise selected source
         if (!Peek) begin
             peek_Value = TapPC;
         end else if (SW[4] == 1'b0) begin
-            // peek page for reg_file
+            // Regfile peek page
             peek_Value = regfile_peek_data;
         end else begin
-            // Bus and ALU peeks
-            case (peek_select)
+            // Bus/ALU pages
+            case (peekSelect)
                 4'h0: peek_Value = TapPC;
                 4'h1: peek_Value = TapInstruction;
                 4'h2: peek_Value = TapRD1;
@@ -97,40 +101,38 @@ module peek_logic (
                 4'h5: peek_Value = TapALUResult;
                 4'h6: peek_Value = TapDataMemOut;
                 4'h7: peek_Value = TapResult;
-				4'hC: peek_Value = TapRE; 
-				4'hD  peek_Value = TapALUResult; // RZ
-				4'hE: peek_Value = TapRM;
-				4'hF: peek_Value = TapResult; // RY Writeback 
+                4'hC: peek_Value = TapRE;     // RE now shows ExtImmE (extended immediate)
+                4'hD: peek_Value = TapALUResult;   // RZ (ALUResultM)
+                4'hE: peek_Value = TapRM;  // RM (WriteDataM)
+                4'hF: peek_Value = TapResult;      // RY (Writeback result)
                 default: ;
             endcase
         end
     end
 
-    // peek_half select for Upper or lower half
+    // Upper/lower half select
     assign peek_half = (SW[5] == 1'b0) ? peek_Value[15:0] : peek_Value[31:16];
 
-    //Prepare nibbles for the seven-seg hex display
+    //Prepare nibbles for seven-seg modules
     logic [3:0] hex5_nibble, hex4_nibble, hex3_nibble, hex2_nibble, hex1_nibble, hex0_nibble;
-
 
     // Cycle count on HEX5:HEX4
     assign hex5_nibble = cycle_count[7:4];
     assign hex4_nibble = cycle_count[3:0];
 
-
-    // Operate HEX3 through HEX0 nibble
+    // Drive HEX3..HEX0 nibbles
     always_comb begin
-        // Defaults to normal peek peek_half
+        // Defaults to normal peek half
         hex3_nibble = peek_half[15:12];
-        hex2_nibble = peek_half[11:8];
-        hex1_nibble = peek_half[7:4];
-        hex0_nibble = peek_half[3:0];
+        hex2_nibble = half[11:8];
+        hex1_nibble = half[7:4];
+        hex0_nibble = half[3:0];
 
-        // IO peek when in display mode and while the bus peek is still selected, sw4 is up
-        if (SW[4]) begin
-            unique case (peek_select)
+        // IO composite pages when in display mode and bus-peek is selected (SW4=1)
+        // Do not override when Peek is pressed (PC forced display)
+        if (SW[4] && !Peek) begin
+           unique case (peek_select)
                 4'h8: begin
-				
                     // IO0: HEX3:HEX2 = Control[7:0], HEX1:HEX0 = Data[7:0]
                     hex3_nibble = TapPort0Control[7:4];
                     hex2_nibble = TapPort0Control[3:0];
@@ -138,7 +140,6 @@ module peek_logic (
                     hex0_nibble = TapPort0Data[3:0];
                 end
                 4'h9: begin
-				
                     // IO1: HEX3:HEX2 = Control[7:0], HEX1:HEX0 = Data[7:0]
                     hex3_nibble = TapPort1Control[7:4];
                     hex2_nibble = TapPort1Control[3:0];
@@ -146,21 +147,20 @@ module peek_logic (
                     hex0_nibble = TapPort1Data[3:0];
                 end
                 4'hA: begin
-				
-                    // Real I/O 0 output displayed on Hex1 through Hex0
+                    // Actual IO0 output (low 8 bits) on HEX1:HEX0
                     hex3_nibble = 4'h0;
                     hex2_nibble = 4'h0;
-                    hex1_nibble = Port0_Out[7:4];
-                    hex0_nibble = Port0_Out[3:0];
+                    hex1_nibble = Port0Out[7:4];
+                    hex0_nibble = Port0Out[3:0];
                 end
                 4'hB: begin
-                    // Real I/O 1 output displayed on Hex1 through Hex0
+                    // Actual IO1 output (low 8 bits) on HEX1:HEX0
                     hex3_nibble = 4'h0;
                     hex2_nibble = 4'h0;
-                    hex1_nibble = Port1_Out[7:4];
-                    hex0_nibble = Port1_Out[3:0];
+                    hex1_nibble = Port1Out[7:4];
+                    hex0_nibble = Port1Out[3:0];
                 end
-                default: ; // retain the normal peek (peek_half)
+                default: ; // keep normal peek half
             endcase
         end
     end
