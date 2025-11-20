@@ -410,7 +410,7 @@ end
 	// 00 -> ALUOutW, 01 -> ReadDataW, 1x -> PCPlus4W
 	logic [1:0] WB_select;
 	always_comb WB_select = LinkW ? 2'b10 : {1'b0, MemtoRegW};
-	mux_three #(32) ry_mux (
+	mux3 #(32) ry_mux (
 		.d0(ALUOutW),
 		.d1(ReadDataW),
 		.d2(PCPlus4W),
@@ -419,4 +419,5 @@ end
 	);
 
 endmodule
+
 
