@@ -8,7 +8,8 @@
  *              debug bus value.
  */
 
-module peek_logic (
+module peek_logic 
+(
 
     // Basic board inputs
     input  logic [9:0]   SW,             // slide switches for selecting pages/modes
@@ -373,4 +374,5 @@ module peek_logic (
     Hex7 u_hex0 (.nibble(hex0_nibble), .Seg(HEX0));
 
 endmodule
+
 
