@@ -1,120 +1,421 @@
-module datapath(
-    input  logic        clk, reset, 
-    input  logic [1:0]  RegSrcD, ImmSrcD, 
-    input  logic        ALUSrcE, BranchTakenE, 
-    input  logic [2:0]  ALUControlE,  
-    input  logic        MemtoRegW, PCSrcW, RegWriteW, 
-    input  logic        LinkD,              // NEW: BL in Decode
-    output logic [31:0] PCF, 
-    input  logic [31:0] InstrF, 
-    output logic [31:0] InstrD, 
-    output logic [31:0] ALUOutM, WriteDataM, 
-    input  logic [31:0] ReadDataM, 
-    output logic [3:0]  ALUFlagsE, 
-    // hazard logic 
-    output logic        Match_1E_M, Match_1E_W, Match_2E_M, Match_2E_W, Match_12D_E, 
-    input  logic [1:0]  ForwardAE, ForwardBE, 
-    input  logic        StallF, StallD, FlushD
-); 
-                           
-  logic [31:0] PCPlus4F, PCPlus4D, PCPlus4E, PCPlus4M, PCPlus4W;
-  logic [31:0] PCnext1F, PCnextF; 
-  logic [31:0] ExtImmD, rd1D, rd2D; 
-  logic [31:0] rd1E, rd2E, ExtImmE, SrcAE, SrcBE, WriteDataE, ALUResultE; 
-  logic [31:0] ReadDataW, ALUOutW, ResultW; 
-  logic [31:0] PCPlus8D;  // pipelined PC+8 for BL
-  logic [3:0]  RA1D, RA2D, RA1E, RA2E, WA3E, WA3M, WA3W, WA3D; 
-  logic        Match_1D_E, Match_2D_E; 
-  logic        LinkE, LinkM, LinkW;           // pipelined Link bit
+/***
+Written by:  Luke Johnson and Brandon Kampsen 
+Date Written: 11-19-2025
+Description: Datapath that implements instruction fetch, register file, ALU
+				 and PC
+cite:
+	Datapath modified from H&H, HDL Example 7.5 found on page 418
+***/
 
-  // ============================================================
-  // Fetch stage 
-  // ============================================================
-  mux2 #(32) pcnextmux(PCPlus4F, ResultW, PCSrcW, PCnext1F); 
-  mux2 #(32) branchmux(PCnext1F, ALUResultE, BranchTakenE, PCnextF); 
-  flopenr #(32) pcreg(clk, reset, ~StallF, PCnextF, PCF); 
-  adder   #(32) pcadd (PCF, 32'h4, PCPlus4F); 
+module datapath( 
+	input logic clk, reset,
+	input logic [1:0] RegSrc,
+	input logic RegWrite,
+	input logic MemWrite,
+	input logic [1:0] ImmSrc,
+	input logic ALUSrc,
+	input logic [2:0] ALUControl,
+	input logic MemtoReg,
+	input logic Branch,               // branch control (D stage)
+	input logic [1:0] FlagWrite,      // flag write enables (D stage)
+	output logic [31:0] PC,
+	output logic [3:0] ALUFlagsE,
+	input logic [31:0] InstrF,              // instruction from fetch (imem)
+	output logic [31:0] InstrD,             // decode stage instruction (after fetch_dff)
+	output logic [31:0] ALUResult, WriteData,
+	input logic [31:0] ReadData,
+    // Peek and debug taps
+	input logic [3:0] reg_file_peek_sel,
+	output logic [31:0] reg_file_peek_data,
+	output logic [31:0] TapRD1,
+	output logic [31:0] TapRD2,
+	output logic [31:0] TapSrcB,
+	output logic [31:0] TapResult,
+	output logic [31:0] TapExtImmE,
+	// Additional immediate-cycle debug taps
+	output logic [31:0] TapALUResultE,   // ALU output before E->M dff
+	output logic [31:0] TapWriteDataE,   // WriteDataE (forwarded RD2) before E->M dff
+	output logic [31:0] TapResultPreWB,  // Writeback mux value based on M-stage inputs
+	// Expose E-stage MemWrite for memory interface
+	output logic MemWriteE_final,
+	// Hazard visibility for top-level fetch register
+	output logic stallF_final,
+	output logic flushD_final
+);
 
-  // pipeline PC+4 to D, then add 4 → PC+8
-  flopr   #(32) pc4regD (clk, reset, PCPlus4F, PCPlus4D);
-  adder   #(32) pc8add (PCPlus4D, 32'h4, PCPlus8D); // PC + 8 for Register 15
+	logic [31:0] PCNext, PCPlus4, PCPlus8;
+	logic [31:0] ExtImmD, SrcA, SrcB, Result;
+	logic [31:0] WriteDataD; // D-stage RD2 from Register_File
+	logic [3:0] RA1, RA2;
 
-  // ============================================================
-  // Decode Stage 
-  // ============================================================
-  flopenrc #(32) instrreg(clk, reset, ~StallD, FlushD, InstrF, InstrD); 
+	// Next PC logic
+// During reset, force known control values to avoid X-propagation deadlock
+logic        PCSrcM_clean;
+logic        stallF_clean;
+logic        flushD_clean;
 
-  // Source register selection (same as before)
-  mux2 #(4) ra1mux(InstrD[19:16], 4'b1111,    RegSrcD[0], RA1D); 
-  mux2 #(4) ra2mux(InstrD[3:0],   InstrD[15:12], RegSrcD[1], RA2D); 
-
-  // Destination register selection:
-  //   normal: Rd (InstrD[15:12])
-  //   BL    : R14 (4'b1110)
-  mux2 #(4) wa3mux(InstrD[15:12], 4'b1110, LinkD, WA3D);
-
-  // Register file: R15 input is PC+8 for current instruction
-  regfile rf(
-      clk, RegWriteW,
-      RA1D, RA2D,
-      WA3W, ResultW, PCPlus8D,
-      rd1D, rd2D
-  );  
-
-  extend ext(InstrD[23:0], ImmSrcD, ExtImmD); 
-
-  // ============================================================
-  // Execute Stage 
-  // ============================================================
-  flopr #(32) rd1reg (clk, reset, rd1D,     rd1E); 
-  flopr #(32) rd2reg (clk, reset, rd2D,     rd2E); 
-  flopr #(32) immreg (clk, reset, ExtImmD,  ExtImmE); 
-  flopr #(4)  wa3ereg(clk, reset, WA3D,     WA3E); 
-  flopr #(4)  ra1reg (clk, reset, RA1D,     RA1E); 
-  flopr #(4)  ra2reg (clk, reset, RA2D,     RA2E); 
-  flopr #(32) pc8ereg(clk, reset, PCPlus8D, PCPlus8E); // PC+8 into E
-  flopr #(1)  linkereg(clk, reset, LinkD,   LinkE);    // Link bit into E
-
-  mux3 #(32) byp1mux(rd1E, ResultW, ALUOutM, ForwardAE, SrcAE); 
-  mux3 #(32) byp2mux(rd2E, ResultW, ALUOutM, ForwardBE, WriteDataE); 
-  mux2 #(32) srcbmux(WriteDataE, ExtImmE, ALUSrcE, SrcBE); 
-
-  alu alu(SrcAE, SrcBE, ALUControlE, ALUResultE, ALUFlagsE); 
-
-  // ============================================================
-  // Memory Stage 
-  // ============================================================
-  flopr #(32) aluresreg(clk, reset, ALUResultE, ALUOutM); 
-  flopr #(32) wdreg     (clk, reset, WriteDataE, WriteDataM); 
-  flopr #(4)  wa3mreg   (clk, reset, WA3E,       WA3M); 
-  flopr #(32) pc8mreg   (clk, reset, PCPlus8E,   PCPlus8M);
-  flopr #(1)  linkmreg  (clk, reset, LinkE,      LinkM);
-
-  // ============================================================
-  // Writeback Stage 
-  // ============================================================
-  flopr #(32) aluoutreg(clk, reset, ALUOutM, ALUOutW); 
-  flopr #(32) rdreg    (clk, reset, ReadDataM, ReadDataW); 
-  flopr #(4)  wa3wreg  (clk, reset, WA3M,      WA3W); 
-  flopr #(1)  linkwreg (clk, reset, LinkM,     LinkW);
-
-  // normal ALU/memory result
-  logic [31:0] NormalResultW;
-  mux2 #(32) resmux1(ALUOutW, ReadDataW, MemtoRegW, NormalResultW);
-
-  
- mux2 #(32) resmux2(NormalResultW, PCPlus4W, LinkW, ResultW);
+always_comb begin
+    if (reset) begin
+        PCSrcM_clean = 1'b0;
+        stallF_clean = 1'b0;
+        flushD_clean = 1'b1;
+    end else begin
+        PCSrcM_clean = PCSrcM;
+        stallF_clean = stallF_final;
+        flushD_clean = flushD_final;
+    end
+end
 
 
-  // ============================================================
-  // Hazard comparison 
-  // ============================================================
-  eqcmp #(4) m0(WA3M, RA1E, Match_1E_M); 
-  eqcmp #(4) m1(WA3W, RA1E, Match_1E_W); 
-  eqcmp #(4) m2(WA3M, RA2E, Match_2E_M); 
-  eqcmp #(4) m3(WA3W, RA2E, Match_2E_W); 
-  eqcmp #(4) m4a(WA3E, RA1D, Match_1D_E); 
-  eqcmp #(4) m4b(WA3E, RA2D, Match_2D_E); 
-  assign Match_12D_E = Match_1D_E | Match_2D_E; 
+	// Branch PC selection: choose between sequential PCPlus4 and branch target (ALUResultM)
+	mux_n #(32) pcmux (
+		.d0(PCPlus4),
+		.d1(ALUResultM),
+		.s(PCSrcM_clean),
+		.y(PCNext)
+	);
+	// PC register with stall support (enable active when not stalling F stage)
+	flopenr #(32) pcreg (
+		.CLK(clk),
+		.reset(reset),
+		.en(~stallF_clean),
+		.d(PCNext),
+		.q(PC)
+	);
+	PCPlus4 pcadd1(
+		.A(PC),
+		.Y(PCPlus4)
+	);
+
+	// Compute PC+8 (ARM-style PC read) from PC+4 (F stage)
+	PCPlus4 pcadd2(
+		.A(PCPlus4),
+		.Y(PCPlus8)
+	);
+	// Also compute E-stage PC+8 using pipelined PCPlus4E so branches use correct base
+	logic [31:0] PCPlus8E;
+	assign PCPlus8E = PCPlus4E + 32'd4;
+
+    // Fetch -> Decode pipeline register for instruction
+	fetch_dff u_fetch_dff(
+		.instF(InstrF),
+		.stall(stallF_clean),
+		.flushD(flushD_clean),
+		.clk(clk),
+		.instD(InstrD)
+	);
+
+	// Register file logic (use InstrD)
+	mux_n #(4) ra1mux (
+		.d0(InstrD[19:16]),
+		.d1(4'b1111),
+		.s(RegSrc[0]),
+		.y(RA1)
+	);
+	mux_n #(4) ra2mux (
+		.d0(InstrD[3:0]),
+		.d1(InstrD[15:12]),
+		.s(RegSrc[1]),
+		.y(RA2)
+	);
+    
+	// Effective writeback controls (BL forces write to LR)
+logic       RegWriteW_clean;
+logic [3:0] WA3W_clean;
+
+assign RegWriteW_clean = RegWriteW | LinkW;
+assign WA3W_clean      = LinkW ? 4'd14 : WA3W;   // R14 (LR)
+
+
+	// Predeclare link pipeline signals for use in writeback gating
+	logic LinkD, LinkE, LinkM, LinkW;
+
+	reg_file rf (
+		.CLK(clk),
+	    .WE3(RegWriteW_clean),
+		.RA1(RA1),
+		.RA2(RA2),
+	    .WA3(WA3W_clean),
+            .WD3(Result),
+		.R15(PCPlus8),
+			.RD1(SrcA),
+			.RD2(WriteDataD),
+		.PeekSel(reg_file_peek_sel),
+		.PeekData(reg_file_peek_data)
+	);
+	// (writeback mux moved later to support BL link path)
+	extimm Extend(
+		.Instr(InstrD[23:0]),
+		.ImmSrc(ImmSrc),
+			.ExtImm(ExtImmD)
+	);
+
+    // Hazard / Forwarding wires
+    logic        stallF, stallD, flushE;
+    logic [1:0]  forwardA, forwardB; // 00=orig,01=M,10=W
+
+	// ALU logic with forwarding
+	logic [31:0] ALUResultE_int; // internal E-stage ALU result
+	logic [31:0] srcA_fwd, srcB_fwd;
+
+	
+	// Forward muxes for SrcA and RD2E before ALUSrc selection
+	always_comb begin
+    srcA_fwd = (forwardA == 2'b01) ? ALUResultM :
+               (forwardA == 2'b10) ? Result     :
+                                     RD1E;
+
+    srcB_fwd = (forwardB == 2'b01) ? ALUResultM :
+               (forwardB == 2'b10) ? Result     :
+                                     RD2E;
+	end
+
+	mux_n #(32) srcbmux (
+		.d0(srcB_fwd),
+		.d1(ExtImmE),
+		.s(ALUSrcE),
+		.y(SrcB)
+	);
+	// SrcA uses E-stage PC+8 for branches; otherwise forwarded register operand
+	logic [31:0] SrcA_ALU;
+
+	assign SrcA_ALU = BranchE ? PCPlus8E : srcA_fwd;
+
+
+	alu #(32) alu_inst (
+		.ALUControl(ALUControlE),
+		.SrcA(SrcA_ALU),
+		.SrcB(SrcB),
+		.ALUResult(ALUResultE_int),
+		.ALUFlags(ALUFlagsE)
+	);
+
+	// Decode->Execute pipeline register: register D-stage controls and operands
+	logic        MemtoRegE, MemWriteE, ALUSrcE, RegWriteE;
+	logic [2:0]  ALUControlE;
+	logic        BranchE;
+	logic [1:0]  FlagWriteE;
+	logic        CondTrueE;
+	logic [31:0] RD1E, RD2E, ExtImmE;
+	logic [3:0]  RA1E, RA2E, WA3E;
+
+	// Condition evaluation in Decode stage
+	logic [3:0] Register_flags;            // stored flags from previous flag-setting instruction
+	logic [3:0] Cond_flags;        // forwarded flags (accounts for flag update in same cycle)
+	logic       CondTrueD;
+	// Forward most recent ALU flags when current EX stage will write them, so the
+	// very next instruction (in Decode) sees updated condition codes without a bubble.
+	always_comb begin
+		Cond_flags = Register_flags;
+		if (FlagWriteE) Cond_flags = ALUFlagsE; // speculative forward
+	end
+	condcheck u_condcheck(
+		.Cond(InstrD[31:28]),
+		.Flags(Cond_flags),
+		.CondEx(CondTrueD)
+	);
+
+	decode_dff u_decode_dff (
+			.clk(clk),
+			.flushE(flushE),
+			.stallD(stallD),
+			// D-stage controls
+			.MemtoRegD(MemtoReg),
+			.MemWriteD(MemWrite),
+			.ALUSrcD(ALUSrc),
+			.RegWriteD(RegWrite),
+			.ALUControlD(ALUControl),
+			.BranchD(Branch),
+			.FlagWriteD(FlagWrite),
+			.CondTrueD(CondTrueD),
+			// D-stage datapath values
+			.RA1D(RA1),
+			.RA2D(RA2),
+			.RD1D(SrcA),
+			.RD2D(WriteDataD),
+			.ExtImmD(ExtImmD),
+			.WA3D(InstrD[15:12]),
+			// E-stage outputs
+			.MemtoRegE(MemtoRegE),
+			.MemWriteE(MemWriteE),
+			.ALUSrcE(ALUSrcE),
+			.RegWriteE(RegWriteE),
+			.ALUControlE(ALUControlE),
+			.BranchE(BranchE),
+			.FlagWriteE(FlagWriteE),
+			.CondTrueE(CondTrueE),
+			.RA1E(RA1E),
+			.RA2E(RA2E),
+			.RD1E(RD1E),
+			.RD2E(RD2E),
+			.ExtImmE(ExtImmE),
+			.WA3E(WA3E)
+	);
+
+
+	logic [3:0] WA3W;
+
+    // Execute -> Memory pipeline register
+	logic        MemtoRegM, MemWriteM, RegWriteM, PCSrcM;
+	logic [31:0] ALUResultM, WriteDataM;
+	logic [3:0]  WA3M;
+	// W-stage signals
+	logic        PCSrcW, RegWriteW, MemtoRegW;
+	logic [31:0] ReadDataW, ALUOutW;
+
+    // Update flags register at end of Execute stage when instruction writes flags
+
+	always_ff @(posedge clk or posedge reset) begin
+    if (reset)
+        Register_flags <= 4'h0;
+    else if (FlagWriteE)
+        Register_flags <= ALUFlagsE; // capture latest ALU flags
+end
+
+
+	// Determine PCSrcE (branch taken) from BranchE & CondTrueE
+	logic PCSrcE;
+	assign PCSrcE = BranchE & CondTrueE;
+
+	execute_dff u_execute_dff (
+		.clk(clk),
+		.flushE(flushE),
+	    .MemtoRegE(MemtoRegE),
+	    .MemWriteE(MemWriteE),
+	    .RegWriteE(RegWriteE),
+	    .PCSrcE(PCSrcE),
+	    .ALUResultE(ALUResultEWire),
+	    .WriteDataE(srcB_fwd),
+	    .WA3E(WA3E),
+	    .MemtoRegM(MemtoRegM),
+	    .MemWriteM(MemWriteM),
+	    .RegWriteM(RegWriteM),
+	    .PCSrcM(PCSrcM),
+	    .ALUResultM(ALUResultM),
+	    .WriteDataM(WriteDataM),
+	    .WA3M(WA3M)
+    );
+
+	// Hazard unit (user-provided interface)
+	logic hz_stall, hz_flush;
+	hazard_unit hz(
+		// EX stage (for forwarding)
+		.id_ex_rd(WA3E),
+		.id_ex_memread(MemtoRegE),
+		.id_ex_rs(RA1E),
+		.id_ex_rt(RA2E),
+		// ID stage (for load-use stall)
+		.if_id_rs(RA1),
+		.if_id_rt(RA2),
+		// Producers and control transfer
+		.ex_mem_write(RegWriteM),
+		.ex_mem_rd(WA3M),
+		.mem_branch(PCSrcM),
+		// Outputs
+		.stall(hz_stall),
+		.flush(hz_flush),
+		.forwardA(forwardA),
+		.forwardB(forwardB)
+	);
+	// Map to pipeline controls: stall F and D on hz_stall; flush E and D on hz_flush
+	assign stallF = hz_stall;
+	assign stallD = hz_stall;
+	// Do NOT flush E on load-use stall; keep EX instruction (e.g., load) advancing.
+	assign flushE = hz_flush; // only on control transfer (branch)
+	assign flushD = hz_flush;
+
+	// Drive outward-facing MemWrite from M-stage
+	assign MemWriteEOut = MemWriteM;
+	// Export hazard signals for top-level (stall fetch, flush decode)
+	assign stallFOut = stallF_clean;
+	assign flushDOut = flushD_clean;
+
+    // Export M-stage values to top-level memory interface
+	assign WriteData = WriteDataM;
+	assign ALUResult = ALUResultM;
+
+    // Memory -> Writeback pipeline register
+    write_dff u_write_dff (
+	    .clk(clk),
+	    // M-stage inputs
+	    .PCSrcM(PCSrcM),
+	    .RegWriteM(RegWriteM),
+	    .MemtoRegM(MemtoRegM),
+	    .ReadDataM(ReadData),
+	    .ALUOutM(ALUResultM),
+	    .WA3M(WA3M),
+	    // W-stage outputs
+	    .PCSrcW(PCSrcW),
+	    .RegWriteW(RegWriteW),
+	    .MemtoRegW(MemtoRegW),
+	    .ReadDataW(ReadDataW),
+	    .ALUOutW(ALUOutW),
+	    .WA3W(WA3W)
+    );
+
+	// Debug taps
+	// Show inputs to stage DFFs (current-cycle values)
+	assign TapRD1      = SrcA;          // D-stage regfile RD1 (input to decode_dff)
+	assign TapRD2      = WriteDataD;    // D-stage regfile RD2 (input to decode_dff)
+	assign TapSrcB     = SrcB;          // ALU operand B (E-stage combinational)
+	assign TapResult   = Result;        // Writeback mux (W-stage comb); kept for RY legacy
+	assign TapExtImmE  = ExtImmD;       // Use D-stage extended immediate (input to decode_dff)
+	assign TapALUResultE = ALUResultE_int; // ALU output before execute_dff
+	assign TapWriteDataE = srcB_fwd;       // Forwarded RD2 before execute_dff
+
+	// Pre-WB result based on M-stage values (input to write_dff)
+	case ({LinkM, MemtoRegM})
+		2'b00: TapResultPreWB = ALUResultM;
+		2'b01: TapResultPreWB = ReadData;
+		default: TapResultPreWB = PCPlus4M;
+	endcase
+
+	// ------------------------------------------------------------
+// Link (BL) support: write LR <= PC+4 and branch to target.
+// Detect LinkD from instruction (ARM-like: opcode[27:25]==101 and bit[24]==1)
+assign LinkD = (InstrD[27:25] == 3'b101) && InstrD[24];
+
+// Pipeline PC+4 and Link alongside to align with WB
+logic [31:0] PCPlus4D, PCPlus4E, PCPlus4M, PCPlus4W;
+
+always_ff @(posedge clk or posedge reset) begin
+    if (reset) begin
+        LinkE    <= 1'b0;
+        LinkM    <= 1'b0;
+        LinkW    <= 1'b0;
+        PCPlus4D <= 32'h0;
+        PCPlus4E <= 32'h0;
+        PCPlus4M <= 32'h0;
+        PCPlus4W <= 32'h0;
+    end else begin
+        // F->D
+        PCPlus4D <= PCPlus4;
+
+        // D->E
+        LinkE    <= LinkD;
+        PCPlus4E <= PCPlus4D;
+
+        // E->M
+        LinkM    <= LinkE;
+        PCPlus4M <= PCPlus4E;
+
+        // M->W
+        LinkW    <= LinkM;
+        PCPlus4W <= PCPlus4M;
+    end
+end
+
+
+	// Writeback result mux: prefer link (PC+4) when LinkW asserted
+	// 00 -> ALUOutW, 01 -> ReadDataW, 1x -> PCPlus4W
+	logic [1:0] WB_select;
+	always_comb WB_select = LinkW ? 2'b10 : {1'b0, MemtoRegW};
+	mux_three #(32) ry_mux (
+		.d0(ALUOutW),
+		.d1(ReadDataW),
+		.d2(PCPlus4W),
+		.s(WB_select),
+		.y(Result)
+	);
 
 endmodule
