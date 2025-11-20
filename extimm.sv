@@ -26,7 +26,7 @@ module extimm
     output logic [31:0]  ExtImm
 );
 
-    // Immediate extension multiplexer (logic unchanged)
+    // Immediate extension multiplexer 
     always_comb
         case (ImmSrc)
 
@@ -45,3 +45,4 @@ module extimm
         endcase
 
 endmodule
+
