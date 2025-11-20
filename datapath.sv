@@ -114,14 +114,14 @@ module datapath(
 	);
 
 	// First increment: compute PC + 4 for the next sequential instruction address
-	PCPlus4 pcadd1
+	adder pcadd1
 	(
 		.A(PC),
 		.Y(PCPlus4)
 	);
 
 	// Second increment: generate PC + 8 (how ARM sees PC when read as R15)
-	PCPlus4 pcadd2(
+	adder pcadd2(
 		.A(PCPlus4),
 		.Y(PCPlus8)
 	);
@@ -135,7 +135,7 @@ module datapath(
 	
 	// Latch the fetched instruction into the decode stage,
 	// respecting stalls and flushes requested by the hazard unit
-	fetch_dff u_fetch_dff
+	IF_register u_fetch_dff
 	(
 		.instF(InstrF),
 		.stall(stallF_clean),
@@ -195,8 +195,8 @@ module datapath(
 		.R15(PCPlus8),
 		.RD1(SrcA),
 		.RD2(WriteDataD),
-		.PeekSel(reg_file_peek_sel),
-		.PeekData(reg_file_peek_data)
+		.peek_sel(reg_file_peek_sel),
+		.peek_data(reg_file_peek_data)
 	);
 
 	// Immediate extension: builds a 32-bit constant from the instruction and ImmSrc
@@ -254,11 +254,11 @@ module datapath(
 	// Actual ALU computation using the E-stage control bits and operands
 	alu #(32) alu_inst 
 	(
-		.ALUControl(ALUControlE),
+		.aluControl(ALUControlE),
 		.SrcA(SrcA_ALU),
 		.SrcB(SrcB),
-		.ALUResult(ALUResultE_int),
-		.ALUFlags(ALUFlagsE)
+		.aluResult(ALUResultE_int),
+		.aluFlags(ALUFlagsE)
 	);
 
 
@@ -302,7 +302,7 @@ module datapath(
 	);
 
 	// Pipeline register from decode to execute stage
-	decode_dff u_decode_dff 
+	D_register u_decode_dff 
 	(
 		.clk(clk),
 		.flushE(flushE),
@@ -379,7 +379,7 @@ module datapath(
 
 
 	// Pipeline register from execute to memory stage
-	execute_dff u_execute_dff 
+	E_register u_execute_dff 
 	(
 		.clk(clk),
 		.flushE(flushE),
@@ -406,47 +406,47 @@ module datapath(
 	// Hazard unit: forwarding, stalling, and flushing logic
 	// ----------------------------------------------------------------------
 
-	logic hz_stall, hz_flush;
+	logic haz_stall, haz_flush;
 
-	hazard_unit hz
+	hazardunit hz
 	(
 		// Execute-stage info used to detect hazards and forwarding
-		.id_ex_rd(WA3E),
-		.id_ex_memread(MemtoRegE),
-		.id_ex_rs(RA1E),
-		.id_ex_rt(RA2E),
+		.destRegE(WA3E),
+		.loadE(MemtoRegE),
+		.rsE(RA1E),
+		.rtE(RA2E),
 
 		// Decode-stage register usage for load-use checks
-		.if_id_rs(RA1),
-		.if_id_rt(RA2),
+		.rsD(RA1),
+		.rtD(RA2),
 
 		// Info about writes in the memory stage and branch control
-		.ex_mem_write(RegWriteM),
-		.ex_mem_rd(WA3M),
-		.mem_branch(PCSrcM),
+		.writeM(RegWriteM),
+		.rdM(WA3M),
+		.branch_m(PCSrcM),
 
 		// Hazard outputs: stall, flush, and forwarding selections
-		.stall(hz_stall),
-		.flush(hz_flush),
+		.stall(haz_stall),
+		.flush(haz_flush),
 		.forwardA(forwardA),
 		.forwardB(forwardB)
 	);
 
 	// When hz_stall is high, we hold both fetch and decode stages
-	assign stallF = hz_stall;
-	assign stallD = hz_stall;
+	assign stallF = haz_stall;
+	assign stallD = haz_stall;
 
 	// Control hazards result in flushing decode and execute
-	assign flushE = hz_flush;
-	assign flushD = hz_flush;
+	assign flushE = haz_flush;
+	assign flushD = haz_flush;
 
 
 	// Memory write signal seen by the data memory comes from M-stage MemWrite
 	assign MemWriteEOut = MemWriteM;
 
 	// Clean hazard outputs going back to the top-level for fetch and decode
-	assign stallFOut = stallF_clean;
-	assign flushDOut = flushD_clean;
+	assign stallF_final = stallF_clean;
+	assign flush_final = flushD_clean;
 
 
     // M-stage values going outward to the data memory interface
@@ -456,7 +456,7 @@ module datapath(
 
 	// Memory -> Writeback pipeline registers
 
-    write_dff u_write_dff 
+    WB_register u_write_dff 
 	(
 	    .clk(clk),
 
@@ -1013,6 +1013,7 @@ end
 	);
 
 endmodule
+
 
 
 
