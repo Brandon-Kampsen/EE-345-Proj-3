@@ -3,7 +3,7 @@
  * Date Written: 11-19-2025
  * File Description: Datapath that ties together instruction fetch, register file,
  *              ALU operations, and PC update for our pipelined ARM-style core.
- * note:
+ * cite:
  *   Structure is inspired by H&H, HDL Example 7.5 (page 418), but adapted
  *   for our project with extra pipeline stages and debug visibility.
  */ 
@@ -1013,6 +1013,7 @@ end
 	);
 
 endmodule
+
 
 
 
