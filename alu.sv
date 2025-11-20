@@ -1,42 +1,61 @@
-/*
-Written by:  Luke Johnson & Brandon Kampsen
-Date Written: 10-17-2025
-Description: ALU that performs ADD , OR , SUB , AND, MOV using a 3-bit ALU control signal 
-*/
+/***
+Written by:  Nathan A. & Devin Nowowiejski
+Date Written: 10-13-2025
+Description: 3-bit ALU that performs add, or, sub, and, or move
+***/
+
+// change header, comments, formatting 
+// Variable names updated, review instantiation 
 
 module alu #(parameter N = 32)(
-    input logic [2:0] aluControl,
-    input logic [N-1:0] SrcA, SrcB,
-    output logic [N-1:0] aluResult,
-	output logic [3:0] ALU_flags 
-	
+	input  logic [2:0]    aluControl,
+	input  logic [N-1:0]  SrcA,
+	input  logic [N-1:0]  SrcB,
+	output logic [N-1:0]  aluResult,
+	output logic [3:0]    aluFlags
 );
 
-logic neg, zero, carry, overflow; 
- logic [31:0] condinvb; 
-  logic [32:0] sum; 
- 
-  assign condinvb = aluControl[0] ? ~b : b; 
-  assign sum = a + condinvb + aluControl[0];
-  
-always_comb begin
-    case (aluControl)
-        3'b000:   aluResult = SrcA + SrcB;           // ADD
-        3'b001:   aluResult = SrcA - SrcB;           // SUB
-        3'b010:   aluResult = SrcA & SrcB;           // AND
-        3'b011:   aluResult = SrcA | SrcB;           // OR
-		3'b100:   aluResult = SrcB;		             // MOV
-        default: aluResult = SrcA + SrcB;			 // Default to Add them together
-    endcase
-end
+	// Extended-width adders for proper carry/borrow
+	logic [N:0] add_wide;
+	logic [N:0] sub_wide;
 
- assign neg      = aluResult[31]; 
-  assign zero     = (aluResult == 32'b0); 
-  assign carry    = (aluControl[1] == 1'b0) & sum[32]; 
-  assign overflow = (aluControl[1] == 1'b0) & ~(a[31] ^ b[31] ^ 
-aluControl[0]) &  
-                                                (a[31] ^ sum[31]);  
-  assign ALU_flags = {neg, zero, carry, overflow}; 
+	always_comb begin
+		// Compute core ALU operation
+		case (ALUControl)
+			3'b000:   aluResult = SrcA + SrcB;   // ADD
+			3'b001:   aluResult = SrcA - SrcB;   // SUB
+			3'b010:   aluResult = SrcA & SrcB;   // AND
+			3'b011:   aluResult = SrcA | SrcB;   // ORR
+			3'b100:   aluResult = SrcB;          // MOV
+			default:  aluResult = SrcA + SrcB;   // Default ADD
+		endcase
+
+		// Precompute add/sub with carry out
+		add_wide = {1'b0, SrcA} + {1'b0, SrcB};
+		sub_wide = {1'b0, SrcA} + {1'b0, ~SrcB} + {{N{1'b0}}, 1'b1}; // A + (~B) + 1
+
+		// NZ flags
+		aluFlags[3] = aluResult[N-1];            // N
+		aluFlags[2] = (aluResult == '0);         // Z
+
+		// C and V depend on operation (aluFlags = {N,Z,C,V})
+		case (aluControl)
+			3'b000: begin // ADD
+				aluFlags[1] = add_wide[N]; // C = carry out
+				aluFlags[0] = (~(SrcA[N-1] ^ SrcB[N-1])) & (SrcA[N-1] ^ aluResult[N-1]); // V
+			end
+			3'b001: begin // SUB  (A - B)
+				aluFlags[1] = sub_wide [N]; // C = NOT borrow (carry out of A + ~B + 1)
+				aluFlags[0] = (SrcA[N-1] ^ SrcB[N-1]) & (SrcA[N-1] ^ ALUResult[N-1]); // V
+			end
+			default: begin
+				// For logical/move ops, C and V set to 0 here; flag write gating should control updates
+				aluFlags[1] = 1'b0; // C
+				aluFlags[0] = 1'b0; // V
+			end
+		endcase
+	end
+
+
 endmodule
 
-endmodule

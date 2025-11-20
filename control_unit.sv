@@ -1,109 +1,82 @@
-/*
-Written by:  Luke Johnson & Brandon Kampsen
-Date Written: 10-16-25
-Description: Decodes intructions by utilizing a Control System (ARM)
-*/
-module control_unit(
-				  input  logic         clk, reset, 
-                  input  logic [31:12] InstrD, 
-                  input  logic [3:0]   ALUFlagsE, 
-                  output logic [1:0]   RegSrcD, ImmSrcD,  
-                  output logic         ALUSrcE, BranchTakenE, 
-                  output logic [2:0]   ALUControlE, 
-                  output logic         MemWriteM, 
-                  output logic         MemtoRegW, PCSrcW, RegWriteW, 
-                  // hazard interface 
-                  output logic         RegWriteM, MemtoRegE, 
-                  output logic         PCWrPendingF, 
-                  input  logic         FlushE); 
- 
-  logic [9:0] controlsD; 
-  logic       CondExE, ALUOpD; 
-  logic [2:0] ALUControlD; 
-  logic       ALUSrcD; 
+/***
+Written by:  Nathan A. & Devin Nowowiejski
+Date Written: 10-5-25
+Description: ARM-style control unit that decodes instruction
 
-  logic       MemtoRegD, MemtoRegM; 
-  logic       RegWriteD, RegWriteE, RegWriteGatedE; 
-  logic       MemWriteD, MemWriteE, MemWriteGatedE; 
-  logic       BranchD, BranchE; 
-  logic [1:0] FlagWriteD, FlagWriteE; 
-  logic       PCSrcD, PCSrcE, PCSrcM; 
-  logic [3:0] FlagsE, FlagsNextE, CondE; 
- 
-  // Decode stage 
-   
-  always_comb 
-   casex(InstrD[27:26]) 
-     2'b00: if (InstrD[25]) controlsD = 10'b0000101001; // DP imm 
-            else            controlsD = 10'b0000001001; // DP reg 
-     2'b01: if (InstrD[20]) controlsD = 10'b0001111000; // LDR 
-            else            controlsD = 10'b1001110100; // STR 
-     2'b10: if (InstrD[24]) controlsD = 10'b0110010010; // BL 
-			else            controlsD = 10'b0110100010; // B
-     default:               controlsD = 10'bxxxxxxxxxx;          //unimplemented 
-   endcase 
- 
-  assign {RegSrcD, ImmSrcD, ALUSrcD, MemtoRegD,  
-          RegWriteD, MemWriteD, BranchD, ALUOpD} = controlsD;  
-           
-  always_comb 
-    if (ALUOpD) begin                 // which Data-processing Instr? 
-      case(InstrD[24:21])   
-       4'b0010: ALUControlD = 3'b001; // SUB 
-       4'b0000: ALUControlD = 3'b010; // AND 
-       4'b1100: ALUControlD = 3'b011; // ORR 
-	   4'b1101: ALUControlD = 3'b100; // MOV
-       default: ALUControlD =  3'b000; // ADD
-      endcase 
-      FlagWriteD[1]   = InstrD[20];   // update N and Z Flags if S bit is 
-set 
-      FlagWriteD[0]   = InstrD[20] & (ALUControlD == 3'b000 | ALUControlD 
-== 3'b001); 
-    end else begin 
-      ALUControlD     = 3'b000;        // perform addition for non
-dataprocessing instr 
-      FlagWriteD      = 2'b00;        // don't update Flags 
-    end 
- 
-  assign PCSrcD       = (((InstrD[15:12] == 4'b1111) & RegWriteD) | 
-BranchD); 
-     
-  // Execute stage 
-  floprc #(7) flushedregsE(clk, reset, FlushE,  
-                           {FlagWriteD, BranchD, MemWriteD, RegWriteD, 
-PCSrcD, MemtoRegD}, 
-                           {FlagWriteE, BranchE, MemWriteE, RegWriteE, 
-PCSrcE, MemtoRegE}); 
-  flopr #(4)  regsE(clk, reset, 
-                    {ALUSrcD, ALUControlD}, 
-440      SOLUTIONS    chapter 7      S. Harris and D.M. Harris, DDCA: ARM® Edition         © 2015 Elsevier, Inc. 
- 
- 
-                    {ALUSrcE, ALUControlE}); 
-                     
-  flopr  #(4) condregE(clk, reset, InstrD[31:28], CondE); 
-  flopr  #(4) flagsreg(clk, reset, FlagsNextE, FlagsE); 
- 
-  // write and Branch controls are conditional 
-  conditional Cond(CondE, FlagsE, ALUFlagsE, FlagWriteE, CondExE, 
-FlagsNextE); 
-  assign BranchTakenE    = BranchE & CondExE; 
-  assign RegWriteGatedE  = RegWriteE & CondExE; 
-  assign MemWriteGatedE  = MemWriteE & CondExE; 
-  assign PCSrcGatedE     = PCSrcE & CondExE; 
-   
-  // Memory stage 
-  flopr #(4) regsM(clk, reset, 
-                   {MemWriteGatedE, MemtoRegE, RegWriteGatedE, 
-PCSrcGatedE}, 
-                   {MemWriteM, MemtoRegM, RegWriteM, PCSrcM}); 
-   
-  // Writeback stage 
-  flopr #(3) regsW(clk, reset, 
-                   {MemtoRegM, RegWriteM, PCSrcM}, 
-                   {MemtoRegW, RegWriteW, PCSrcW}); 
-   
-  // Hazard Prediction 
-  assign PCWrPendingF = PCSrcD | PCSrcE | PCSrcM; 
- 
-endmodule 
+***/
+
+// Change header, formatting, comments
+// Review instantiation in datapath 
+
+module control_unit (
+	input  logic [3:0] Cond,
+	input  logic [1:0] Op,
+	input  logic [5:0] Funct,
+	input  logic [3:0] Rd,
+
+	output logic MemtoReg,
+	output logic MemWrite,
+	output logic [2:0] ALUControl,
+	output logic ALUSrc,
+	output logic [1:0] ImmSrc,
+	output logic RegWrite,
+	output logic [1:0] RegSrc
+);
+
+	always_comb begin
+		// Default values (safe)
+		MemtoReg   = 1'b0;
+		MemWrite   = 1'b0;
+		RegWrite   = 1'b0;
+		ALUSrc     = 1'b0;
+		ImmSrc     = 2'b00;
+		RegSrc     = 2'b00;
+		ALUControl = 3'b000; // default to ADD when ALUOp=0 (e.g., address calc)
+        
+		case (Op)
+			2'b00: begin // Data-processing
+				RegWrite = 1'b1;
+				MemtoReg = 1'b0;
+				MemWrite = 1'b0;
+				RegSrc   = 2'b00;
+				// ALUSrc based on immediate flag
+				if (Funct[5] == 1'b0) begin
+					ALUSrc = 1'b0;
+					ImmSrc = 2'bxx; // don't care for reg operand
+				end else begin
+					ALUSrc = 1'b1;
+					ImmSrc = 2'b00; // 8-bit immediate
+				end
+
+				// ALU operation decode (Funct[4:1] is opcode)
+				case (Funct[4:1])
+					4'b0010: ALUControl = 3'b001; // SUB
+					4'b0000: ALUControl = 3'b010; // AND
+					4'b1100: ALUControl = 3'b011; // ORR
+					4'b1101: ALUControl = 3'b100; // MOV
+					default: ALUControl = 3'b000; // ADD
+				endcase
+			end
+			2'b01: begin // LDR/STR
+				ALUSrc = 1'b1;     // Immediate offset
+				ImmSrc = 2'b01;    // 12-bit unsigned immediate
+				RegSrc = 2'b00;
+				if (Funct[0] == 1'b0) begin // STR
+					MemWrite = 1'b1;
+					RegWrite = 1'b0;
+					MemtoReg = 1'bx; // don't care on store
+					RegSrc    = 2'b10; // Select RD on RA2 for store data
+				end else begin // LDR
+					MemWrite = 1'b0;
+					RegWrite = 1'b1;
+					MemtoReg = 1'b1;
+				end
+			end
+			default: begin
+				// Keep defaults (no-op control)
+			end
+		endcase
+	end
+
+endmodule
+
