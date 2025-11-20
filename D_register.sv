@@ -259,4 +259,5 @@ module D_register (
 	end
 
 endmodule
+*/
 
