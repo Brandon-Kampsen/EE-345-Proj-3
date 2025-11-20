@@ -1,10 +1,11 @@
 /*
-Written by:  Luke Johnson & Brandon Kampsen
-Date Written: 10-16-2025
-File Description: Simple adder that increments the PC by 4 bits
-citation:
-	Adder is from H&H textbook, HDL Example 7.7 on pg. 421
-*/
+ * Written by:  Luke Johnson & Brandon Kampsen
+ * Date Written: 10-16-2025
+ * File Description: Simple adder that increments the PC by 4 bits
+ * cite:
+ * 		Adder is from H&H textbook, HDL Example 7.7 on pg. 421
+ */
+
 
 module adder #(parameter int WIDTH = 32) 
 (
@@ -15,3 +16,4 @@ module adder #(parameter int WIDTH = 32)
 	
 
 endmodule
+
