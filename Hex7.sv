@@ -1,9 +1,9 @@
-/*
-Written by: Luke Johnson & Brandon Kampsen
-Date Written: 10/15/2025
-File Description: Hex nibble to active low 7-seg decoder 
-(This is from Luke's Digital Systems project)
-*/
+/* 
+ * Written by:  Luke Johnson and Brandon Kampsen 
+ * Date Written: 10/15/2025
+ * File Description: Hex nibble to active low 7-seg decoder 
+ * (This is from Luke's Digital Systems project)
+ */ 
 
 module Hex7 
 (
@@ -35,3 +35,4 @@ module Hex7
         endcase
     end
 endmodule
+
