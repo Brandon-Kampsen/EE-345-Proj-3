@@ -82,13 +82,13 @@ end
 		.d(PCNext),
 		.q(PC)
 	);
-	PCPlus4 pcadd1(
+	adder pcadd1(
 		.A(PC),
 		.Y(PCPlus4)
 	);
 
 	// Compute PC+8 (ARM-style PC read) from PC+4 (F stage)
-	PCPlus4 pcadd2(
+	adder pcadd2(
 		.A(PCPlus4),
 		.Y(PCPlus8)
 	);
@@ -136,12 +136,12 @@ assign WA3W_clean      = LinkW ? 4'd14 : WA3W;   // R14 (LR)
 		.RA1(RA1),
 		.RA2(RA2),
 	    .WA3(WA3W_clean),
-            .WD3(Result),
+        .WD3(Result),
 		.R15(PCPlus8),
-			.RD1(SrcA),
-			.RD2(WriteDataD),
-		.PeekSel(reg_file_peek_sel),
-		.PeekData(reg_file_peek_data)
+		.RD1(SrcA),
+		.RD2(WriteDataD),
+		.peek_sel(reg_file_peek_sel),
+		.peek_data(reg_file_peek_data)
 	);
 	// (writeback mux moved later to support BL link path)
 	extimm Extend(
@@ -335,7 +335,7 @@ end
 	assign ALUResult = ALUResultM;
 
     // Memory -> Writeback pipeline register
-    write_dff u_write_dff (
+    WB_register write_inst (
 	    .clk(clk),
 	    // M-stage inputs
 	    .PCSrcM(PCSrcM),
@@ -419,3 +419,4 @@ end
 	);
 
 endmodule
+
