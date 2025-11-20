@@ -1,7 +1,7 @@
 /*
 Written by:  Luke Johnson & Brandon Kampsen
 Date Written: 10-16-2025
-Description: 2:1 Mux utilized throughout the datapath of the processor
+File Description: 2:1 Mux utilized in certain parts of our piplined proccesor project
 cite:
 	Multiplexer is from H&H textbook, HDL Example 7.11, pg 423
 */
@@ -14,4 +14,5 @@ module mux_n #(parameter WIDTH = 8)
 	
 	assign y = s ? d1 : d0;
 	
+
 endmodule
