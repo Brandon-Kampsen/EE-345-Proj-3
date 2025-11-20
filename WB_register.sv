@@ -12,7 +12,8 @@
  *   All of these logic variables were given my Dr. Fourney in the project file
  */
 
-module WB_register (
+module WB_register 
+(
     //  this register updates on rising edge
     input  logic        clk,
 
@@ -110,5 +111,6 @@ module WB_register (
 	end
 
 endmodule
+
 
 
